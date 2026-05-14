@@ -18,11 +18,16 @@ class TextOverlay:
     start_time: float | None = None
     end_time: float | None = None
     duration_mode: DurationMode = "full"
-    font_size: int = 48
+    font_size: int = 36
     font_color: str = "white"
-    box: bool = True
-    box_color: str = "black@0.55"
-    box_border_width: int = 20
+    box: bool = False
+    box_color: str = "black@0.0"
+    box_border_width: int = 0
+    shadow_x: int = 2
+    shadow_y: int = 2
+    shadow_color: str = "black@0.8"
+    border_width: int = 3
+    border_color: str = "black"
     x: str = "(w-text_w)/2"
 
 
@@ -40,11 +45,16 @@ class VideoTextEngine:
         duration_mode: DurationMode = "full",
         start_time: float | None = None,
         end_time: float | None = None,
-        font_size: int = 48,
+        font_size: int = 36,
         font_color: str = "white",
-        box: bool = True,
-        box_color: str = "black@0.55",
-        box_border_width: int = 20,
+        box: bool = False,
+        box_color: str = "black@0.0",
+        box_border_width: int = 0,
+        shadow_x: int = 2,
+        shadow_y: int = 2,
+        shadow_color: str = "black@0.8",
+        border_width: int = 3,
+        border_color: str = "black",
     ) -> Path:
         overlay = TextOverlay(
             text=text,
@@ -57,6 +67,11 @@ class VideoTextEngine:
             box=box,
             box_color=box_color,
             box_border_width=box_border_width,
+            shadow_x=shadow_x,
+            shadow_y=shadow_y,
+            shadow_color=shadow_color,
+            border_width=border_width,
+            border_color=border_color,
         )
         return self.add_text_overlays(video_path, [overlay], output_path=output_path)
 
@@ -81,6 +96,7 @@ class VideoTextEngine:
 
         stream = ffmpeg.input(str(source_path))
         video_stream = stream.video
+        audio_stream = stream.audio
 
         for overlay in overlay_list:
             start, end = self._resolve_time_window(overlay, duration)
@@ -93,16 +109,24 @@ class VideoTextEngine:
                 box=1 if overlay.box else 0,
                 boxcolor=overlay.box_color,
                 boxborderw=overlay.box_border_width,
+                shadowx=overlay.shadow_x,
+                shadowy=overlay.shadow_y,
+                shadowcolor=overlay.shadow_color,
+                borderw=overlay.border_width,
+                bordercolor=overlay.border_color,
                 enable=f"between(t,{self._format_time(start)},{self._format_time(end)})",
             )
 
         if has_audio:
             output = ffmpeg.output(
                 video_stream,
-                stream.audio,
+                audio_stream,
                 str(destination_path),
                 vcodec="libx264",
-                acodec="copy",
+                acodec="aac",
+                audio_bitrate="192k",
+                ar="48000",
+                ac="2",
                 movflags="+faststart",
             )
         else:
@@ -113,7 +137,10 @@ class VideoTextEngine:
                 movflags="+faststart",
             )
 
-        output.overwrite_output().run(cmd=self.ffmpeg_path, capture_stdout=True, capture_stderr=True)
+        run_kwargs = {"capture_stdout": True, "capture_stderr": True}
+        if self.ffmpeg_path:
+            run_kwargs["cmd"] = self.ffmpeg_path
+        output.overwrite_output().run(**run_kwargs)
         return destination_path
 
     def create_overlay(
@@ -123,11 +150,16 @@ class VideoTextEngine:
         start_time: float | None = None,
         end_time: float | None = None,
         duration_mode: DurationMode = "full",
-        font_size: int = 48,
+        font_size: int = 36,
         font_color: str = "white",
-        box: bool = True,
-        box_color: str = "black@0.55",
-        box_border_width: int = 20,
+        box: bool = False,
+        box_color: str = "black@0.0",
+        box_border_width: int = 0,
+        shadow_x: int = 2,
+        shadow_y: int = 2,
+        shadow_color: str = "black@0.8",
+        border_width: int = 3,
+        border_color: str = "black",
     ) -> TextOverlay:
         return TextOverlay(
             text=text,
@@ -140,10 +172,18 @@ class VideoTextEngine:
             box=box,
             box_color=box_color,
             box_border_width=box_border_width,
+            shadow_x=shadow_x,
+            shadow_y=shadow_y,
+            shadow_color=shadow_color,
+            border_width=border_width,
+            border_color=border_color,
         )
 
     def _probe_video(self, video_path: Path) -> dict:
-        return ffmpeg.probe(str(video_path), cmd=self.ffprobe_path)
+        kwargs = {}
+        if self.ffprobe_path:
+            kwargs["cmd"] = self.ffprobe_path
+        return ffmpeg.probe(str(video_path), **kwargs)
 
     def _resolve_time_window(self, overlay: TextOverlay, video_duration: float) -> tuple[float, float]:
         default_end = video_duration if overlay.duration_mode == "full" else video_duration / 2

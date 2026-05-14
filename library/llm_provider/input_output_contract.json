@@ -1,0 +1,417 @@
+{
+  "spec_name": "LLM Provider Input/Output Contract",
+  "spec_version": "1.0.0",
+  "library": "library.llm_provider",
+  "source_language": "python",
+  "purpose": "Machine-readable contract for creating reusable LLM instances and invoking text or frame-analysis operations.",
+  "notes": [
+    "Primary interface is the LLM class.",
+    "Environment-driven default flow is available via create_llm_from_env and VideoContextAnalyzer().",
+    "LLM auto-infers provider from model_name unless lower-level APIs are used.",
+    "Text generation returns raw provider text.",
+    "Frame analysis typically returns JSON text when prompt requests structured output.",
+    "Provider SDK dependencies are optional until their provider is instantiated."
+  ],
+  "provider_inference": {
+    "description": "How provider is inferred from model_name in LLM constructor.",
+    "rules": [
+      {
+        "match": "model_name starts with gpt|o1|o3",
+        "provider": "openai"
+      },
+      {
+        "match": "model_name contains gemini",
+        "provider": "google"
+      },
+      {
+        "match": "fallback",
+        "provider": "google"
+      }
+    ]
+  },
+  "environment_variables": {
+    "LLM_MODEL_NAME": "Model used when creating env-based LLM (default: gemini-2.0-flash)",
+    "LLM_SYSTEM_PROMPT": "System prompt prepended to ask() and analyze_frames() calls",
+    "LLM_PROVIDER": "Optional provider override (google|openai)",
+    "LLM_TEMPERATURE": "Optional float (default: 0.3)",
+    "LLM_MAX_TOKENS": "Optional int (default: 2000)",
+    "LLM_TIMEOUT": "Optional int in seconds (default: 30)",
+    "LLM_API_KEY": "Optional generic key override",
+    "GEMINI_API_KEY": "Google API key fallback",
+    "OPENAI_API_KEY": "OpenAI API key fallback",
+    "VIDEO_CONTEXT_ANALYSIS_PROMPT_TEMPLATE": "Optional context-analyzer prompt template override; must include {frame_count}"
+  },
+  "types": {
+    "LLMInitInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "api_key",
+        "model_name"
+      ],
+      "properties": {
+        "api_key": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Provider API key."
+        },
+        "model_name": {
+          "type": "string",
+          "minLength": 1,
+          "description": "LLM model identifier, example gemini-2.0-flash or gpt-4.1-mini."
+        },
+        "system_prompt": {
+          "type": "string",
+          "default": "",
+          "description": "Persistent system-level instruction for this instance."
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.3
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2000
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30,
+          "description": "Timeout in seconds."
+        }
+      }
+    },
+    "AskInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_prompt"
+      ],
+      "properties": {
+        "user_prompt": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "AskOutput": {
+      "type": "string",
+      "description": "Raw LLM text response."
+    },
+    "AnalyzeFramesInput": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "frames_base64",
+        "prompt"
+      ],
+      "properties": {
+        "frames_base64": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Base64 JPEG bytes without data URI prefix."
+          }
+        },
+        "prompt": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Analysis instruction and output schema guidance."
+        }
+      }
+    },
+    "AnalyzeFramesOutput": {
+      "type": "string",
+      "description": "Raw provider response text, often JSON text by prompt convention."
+    },
+    "LLMConfig": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model"
+      ],
+      "properties": {
+        "provider": {
+          "type": "string",
+          "enum": [
+            "google",
+            "gemini",
+            "openai",
+            "gpt-4-vision"
+          ]
+        },
+        "model": {
+          "type": "string",
+          "minLength": 1
+        },
+        "temperature": {
+          "type": "number",
+          "minimum": 0.0,
+          "maximum": 1.0,
+          "default": 0.3
+        },
+        "max_tokens": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 2000
+        },
+        "timeout": {
+          "type": "integer",
+          "minimum": 1,
+          "default": 30
+        },
+        "api_key": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "default": null
+        },
+        "api_key_env_var": {
+          "type": "string",
+          "default": "GEMINI_API_KEY"
+        }
+      }
+    }
+  },
+  "apis": {
+    "LLM.__init__": {
+      "input_schema": {
+        "$ref": "#/types/LLMInitInput"
+      },
+      "output_schema": {
+        "type": "object",
+        "description": "Initialized LLM instance with embedded provider client."
+      },
+      "example_input": {
+        "api_key": "YOUR_API_KEY",
+        "model_name": "gemini-2.0-flash",
+        "system_prompt": "You are an expert video analyst.",
+        "temperature": 0.3,
+        "max_tokens": 2000,
+        "timeout": 30
+      },
+      "example_output": {
+        "status": "initialized",
+        "instance_type": "LLM",
+        "provider": "google",
+        "model_name": "gemini-2.0-flash"
+      }
+    },
+    "LLM.ask": {
+      "input_schema": {
+        "$ref": "#/types/AskInput"
+      },
+      "output_schema": {
+        "$ref": "#/types/AskOutput"
+      },
+      "example_input": {
+        "user_prompt": "Write a short reel caption for a sunset bike ride."
+      },
+      "example_output": "Golden hour, open road, and pure freedom in one frame."
+    },
+    "LLM.analyze_frames": {
+      "input_schema": {
+        "$ref": "#/types/AnalyzeFramesInput"
+      },
+      "output_schema": {
+        "$ref": "#/types/AnalyzeFramesOutput"
+      },
+      "example_input": {
+        "frames_base64": [
+          "BASE64_FRAME_1",
+          "BASE64_FRAME_2"
+        ],
+        "prompt": "Analyze these frames and return valid JSON with mood, pace, and intensity."
+      },
+      "example_output": "{\"mood\":\"hype\",\"pace\":\"fast\",\"intensity\":\"high\"}"
+    },
+    "prompt_llm": {
+      "description": "Single-call helper for text generation without storing an instance.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "api_key",
+          "model_name",
+          "system_prompt"
+        ],
+        "properties": {
+          "api_key": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "system_prompt": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "user_prompt": {
+            "type": "string",
+            "default": ""
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.3
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 2000
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          }
+        }
+      },
+      "output_schema": {
+        "type": "string"
+      },
+      "example_input": {
+        "api_key": "YOUR_API_KEY",
+        "model_name": "gpt-4.1-mini",
+        "system_prompt": "You are a concise assistant.",
+        "user_prompt": "Summarize this in one sentence.",
+        "provider": null,
+        "temperature": 0.2,
+        "max_tokens": 200,
+        "timeout": 30
+      },
+      "example_output": "This clip presents a fast-paced action sequence with high visual intensity."
+    },
+    "create_provider_with_params": {
+      "description": "Advanced factory API that returns an LLMProvider implementation directly.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "provider",
+          "model_name"
+        ],
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "google",
+              "openai"
+            ]
+          },
+          "model_name": {
+            "type": "string"
+          },
+          "api_key": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          },
+          "temperature": {
+            "type": "number",
+            "minimum": 0.0,
+            "maximum": 1.0,
+            "default": 0.3
+          },
+          "max_tokens": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 2000
+          },
+          "timeout": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 30
+          },
+          "api_key_env_var": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "description": "LLMProvider concrete instance such as GoogleGeminiProvider or OpenAIProvider."
+      }
+    },
+    "create_llm_from_env": {
+      "description": "Create LLM from environment variables for application default wiring.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "output_schema": {
+        "type": "object",
+        "description": "Initialized LLM instance."
+      },
+      "example_input": {},
+      "example_output": {
+        "status": "initialized",
+        "instance_type": "LLM",
+        "source": "environment"
+      }
+    }
+  },
+  "errors": [
+    {
+      "name": "LLMException",
+      "when": "Base class for package-defined errors."
+    },
+    {
+      "name": "LLMConfigurationError",
+      "when": "Invalid configuration, missing API key resolution, or provider SDK import failure."
+    },
+    {
+      "name": "LLMProviderError",
+      "when": "Generic provider operation failure."
+    },
+    {
+      "name": "LLMProviderNotFoundError",
+      "when": "Requested provider key does not exist in registry."
+    },
+    {
+      "name": "LLMFrameAnalysisError",
+      "when": "Frame analysis or text generation call fails at provider level."
+    },
+    {
+      "name": "ValueError",
+      "when": "Invalid config value (temperature, max_tokens, timeout) or empty ask input."
+    }
+  ],
+  "integration_examples": {
+    "video_context_analyzer": {
+      "description": "Pass a reusable LLM instance to VideoContextAnalyzer.",
+      "python": "from library.llm_provider import LLM\nfrom library.video_context_analyzer import VideoContextAnalyzer\n\nllm = LLM(api_key='YOUR_API_KEY', model_name='gemini-2.0-flash', system_prompt='You are an expert video analyst.')\nanalyzer = VideoContextAnalyzer(llm=llm)\nanalysis = analyzer.analyze('clip.mp4')"
+    },
+    "caption_generation": {
+      "description": "Use a different system prompt for caption workflow.",
+      "python": "from library.llm_provider import LLM\n\ncaption_llm = LLM(api_key='YOUR_API_KEY', model_name='gemini-2.0-flash', system_prompt='You write short viral reel captions.')\ncaption = caption_llm.ask('Night drive reel with neon reflections and rain')"
+    }
+  }
+}

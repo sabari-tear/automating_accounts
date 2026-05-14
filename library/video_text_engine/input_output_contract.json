@@ -1,0 +1,572 @@
+{
+  "spec_name": "VideoTextEngine Input/Output Contract",
+  "spec_version": "1.0.0",
+  "engine_class": "VideoTextEngine",
+  "source_language": "python",
+  "purpose": "Standard JSON contract for calling VideoTextEngine methods and interpreting outputs/errors.",
+  "notes": [
+    "This is a transport-agnostic contract. It can be used for CLI wrappers, HTTP services, workflow tools, and AI agents.",
+    "All time values are in seconds.",
+    "Text rendering is powered by FFmpeg drawtext.",
+    "Output video is encoded with H.264 video and AAC audio (when input has audio)."
+  ],
+  "constructor": {
+    "method": "VideoTextEngine.__init__",
+    "input_schema": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "ffmpeg_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional absolute path to ffmpeg binary. If null, engine uses system PATH.",
+          "example": "C:/Practice/ffmpeg/bin/ffmpeg.exe"
+        },
+        "ffprobe_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Optional absolute path to ffprobe binary. If null, engine uses system PATH.",
+          "example": "C:/Practice/ffmpeg/bin/ffprobe.exe"
+        }
+      }
+    },
+    "example_input": {
+      "ffmpeg_path": "C:/Practice/ffmpeg/bin/ffmpeg.exe",
+      "ffprobe_path": "C:/Practice/ffmpeg/bin/ffprobe.exe"
+    },
+    "example_result": {
+      "status": "initialized",
+      "engine": "VideoTextEngine"
+    }
+  },
+  "types": {
+    "VerticalPosition": {
+      "type": "string",
+      "enum": [
+        "up",
+        "center",
+        "down"
+      ]
+    },
+    "DurationMode": {
+      "type": "string",
+      "enum": [
+        "full",
+        "half"
+      ]
+    },
+    "TextOverlay": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "text"
+      ],
+      "properties": {
+        "text": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Text to draw on video."
+        },
+        "position": {
+          "$ref": "#/types/VerticalPosition",
+          "default": "center",
+          "description": "Vertical preset placement."
+        },
+        "start_time": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 0,
+          "description": "Start time in seconds. If null, defaults to 0."
+        },
+        "end_time": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "default": null,
+          "minimum": 0,
+          "description": "End time in seconds. If null, engine derives from duration_mode."
+        },
+        "duration_mode": {
+          "$ref": "#/types/DurationMode",
+          "default": "full",
+          "description": "Used when end_time is null: full = full video, half = first half."
+        },
+        "font_size": {
+          "type": "integer",
+          "default": 48,
+          "minimum": 1,
+          "description": "Text size."
+        },
+        "font_color": {
+          "type": "string",
+          "default": "white",
+          "description": "FFmpeg-compatible color string."
+        },
+        "box": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable background box behind text."
+        },
+        "box_color": {
+          "type": "string",
+          "default": "black@0.55",
+          "description": "Box color with optional alpha."
+        },
+        "box_border_width": {
+          "type": "integer",
+          "default": 20,
+          "minimum": 0,
+          "description": "Padding/border width for box."
+        },
+        "shadow_x": {
+          "type": "integer",
+          "default": 0,
+          "description": "Horizontal text shadow offset in pixels."
+        },
+        "shadow_y": {
+          "type": "integer",
+          "default": 0,
+          "description": "Vertical text shadow offset in pixels."
+        },
+        "shadow_color": {
+          "type": "string",
+          "default": "black@0.5",
+          "description": "Shadow color with optional alpha."
+        },
+        "x": {
+          "type": "string",
+          "default": "(w-text_w)/2",
+          "description": "FFmpeg expression for horizontal position."
+        }
+      }
+    }
+  },
+  "methods": {
+    "create_overlay": {
+      "description": "Build a normalized TextOverlay object before batch rendering.",
+      "input_schema": {
+        "$ref": "#/types/TextOverlay"
+      },
+      "example_input": {
+        "text": "Top headline",
+        "position": "up",
+        "start_time": 0,
+        "end_time": 3.5,
+        "duration_mode": "full",
+        "font_size": 56,
+        "font_color": "white",
+        "box": false,
+        "shadow_x": 3,
+        "shadow_y": 3,
+        "shadow_color": "black@0.7",
+        "x": "(w-text_w)/2"
+      },
+      "output_schema": {
+        "type": "object",
+        "description": "Returns a TextOverlay object equivalent to input + defaults."
+      },
+      "example_output": {
+        "text": "Top headline",
+        "position": "up",
+        "start_time": 0,
+        "end_time": 3.5,
+        "duration_mode": "full",
+        "font_size": 56,
+        "font_color": "white",
+        "box": false,
+        "box_color": "black@0.55",
+        "box_border_width": 20,
+        "shadow_x": 3,
+        "shadow_y": 3,
+        "shadow_color": "black@0.7",
+        "x": "(w-text_w)/2"
+      }
+    },
+    "add_text": {
+      "description": "Single-overlay convenience method.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "video_path",
+          "text"
+        ],
+        "properties": {
+          "video_path": {
+            "type": "string",
+            "description": "Path to source video.",
+            "example": "test/sample_input_videos/2888111587029525988_47150597545.mp4"
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1
+          },
+          "output_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null,
+            "description": "If null, engine generates <source>_with_text.<ext>."
+          },
+          "position": {
+            "$ref": "#/types/VerticalPosition",
+            "default": "center"
+          },
+          "duration_mode": {
+            "$ref": "#/types/DurationMode",
+            "default": "full"
+          },
+          "start_time": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "default": null,
+            "minimum": 0
+          },
+          "end_time": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "default": null,
+            "minimum": 0
+          },
+          "font_size": {
+            "type": "integer",
+            "default": 48,
+            "minimum": 1
+          },
+          "font_color": {
+            "type": "string",
+            "default": "white"
+          },
+          "box": {
+            "type": "boolean",
+            "default": true
+          },
+          "box_color": {
+            "type": "string",
+            "default": "black@0.55"
+          },
+          "box_border_width": {
+            "type": "integer",
+            "default": 20,
+            "minimum": 0
+          },
+          "shadow_x": {
+            "type": "integer",
+            "default": 0
+          },
+          "shadow_y": {
+            "type": "integer",
+            "default": 0
+          },
+          "shadow_color": {
+            "type": "string",
+            "default": "black@0.5"
+          }
+        }
+      },
+      "example_input": {
+        "video_path": "test/sample_input_videos/2888111587029525988_47150597545.mp4",
+        "text": "No box, white text, with shadow",
+        "output_path": "test/sample_output_videos/reel_final.mp4",
+        "position": "center",
+        "duration_mode": "half",
+        "start_time": 0,
+        "end_time": 5,
+        "font_size": 60,
+        "font_color": "white",
+        "box": false,
+        "shadow_x": 3,
+        "shadow_y": 3,
+        "shadow_color": "black@0.7"
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "output_path"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success"
+            ]
+          },
+          "output_path": {
+            "type": "string"
+          },
+          "video_codec": {
+            "type": "string",
+            "example": "h264"
+          },
+          "audio_codec": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "example": "aac"
+          },
+          "applied_overlays": {
+            "type": "integer",
+            "example": 1
+          }
+        }
+      },
+      "example_output": {
+        "status": "success",
+        "output_path": "test/sample_output_videos/reel_final.mp4",
+        "video_codec": "h264",
+        "audio_codec": "aac",
+        "applied_overlays": 1
+      }
+    },
+    "add_text_overlays": {
+      "description": "Apply multiple timed text overlays in one render pass.",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "video_path",
+          "overlays"
+        ],
+        "properties": {
+          "video_path": {
+            "type": "string"
+          },
+          "overlays": {
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "$ref": "#/types/TextOverlay"
+            }
+          },
+          "output_path": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "default": null
+          }
+        }
+      },
+      "example_input": {
+        "video_path": "test/sample_input_videos/2934571291159600221_47912705569.mp4",
+        "output_path": "test/sample_output_videos/reel_storyboard.mp4",
+        "overlays": [
+          {
+            "text": "Hook in first 2 seconds",
+            "position": "up",
+            "start_time": 0,
+            "end_time": 2,
+            "font_size": 58,
+            "font_color": "white",
+            "box": false,
+            "shadow_x": 4,
+            "shadow_y": 4,
+            "shadow_color": "black@0.75"
+          },
+          {
+            "text": "Main value statement",
+            "position": "center",
+            "start_time": 2,
+            "end_time": 6,
+            "font_size": 50,
+            "font_color": "yellow",
+            "box": true,
+            "box_color": "black@0.45",
+            "box_border_width": 16
+          },
+          {
+            "text": "Call to action",
+            "position": "down",
+            "start_time": 6,
+            "end_time": 9,
+            "font_size": 54,
+            "font_color": "white",
+            "box": false,
+            "shadow_x": 3,
+            "shadow_y": 3,
+            "shadow_color": "black@0.8",
+            "x": "(w-text_w)/2"
+          }
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "status",
+          "output_path",
+          "applied_overlays"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "success"
+            ]
+          },
+          "output_path": {
+            "type": "string"
+          },
+          "applied_overlays": {
+            "type": "integer"
+          },
+          "video_codec": {
+            "type": "string"
+          },
+          "audio_codec": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "example_output": {
+        "status": "success",
+        "output_path": "test/sample_output_videos/reel_storyboard.mp4",
+        "applied_overlays": 3,
+        "video_codec": "h264",
+        "audio_codec": "aac"
+      }
+    }
+  },
+  "timing_resolution_rules": {
+    "rule_1": "If start_time is null, effective start time = 0.",
+    "rule_2": "If end_time is null and duration_mode is full, effective end time = full video duration.",
+    "rule_3": "If end_time is null and duration_mode is half, effective end time = half of video duration.",
+    "rule_4": "end_time is clamped to video duration.",
+    "rule_5": "start_time must be >= 0.",
+    "rule_6": "end_time must be > start_time.",
+    "rule_7": "start_time cannot exceed video duration."
+  },
+  "position_mapping": {
+    "up": "h*0.15",
+    "center": "(h-text_h)/2",
+    "down": "h-text_h-h*0.15",
+    "x_default": "(w-text_w)/2"
+  },
+  "text_escaping_behavior": {
+    "description": "Engine escapes special characters before sending to FFmpeg drawtext.",
+    "escaped_characters": [
+      "\\",
+      ":",
+      "'",
+      "%"
+    ]
+  },
+  "output_media_behavior": {
+    "video": {
+      "codec": "libx264",
+      "movflags": "+faststart"
+    },
+    "audio_when_input_has_audio": {
+      "codec": "aac",
+      "bitrate": "192k",
+      "sample_rate": 48000,
+      "channels": 2
+    },
+    "audio_when_input_has_no_audio": {
+      "behavior": "No audio stream in output"
+    }
+  },
+  "error_contract": {
+    "format": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "status",
+        "error_type",
+        "message"
+      ],
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": [
+            "error"
+          ]
+        },
+        "error_type": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "details": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
+      }
+    },
+    "known_errors": [
+      {
+        "error_type": "FileNotFoundError",
+        "message_example": "Video not found: test/sample_input_videos/missing.mp4"
+      },
+      {
+        "error_type": "ValueError",
+        "message_example": "At least one text overlay is required"
+      },
+      {
+        "error_type": "ValueError",
+        "message_example": "start_time must be 0 or greater"
+      },
+      {
+        "error_type": "ValueError",
+        "message_example": "end_time must be greater than start_time"
+      },
+      {
+        "error_type": "ValueError",
+        "message_example": "start_time cannot exceed video duration"
+      },
+      {
+        "error_type": "ffmpeg.Error",
+        "message_example": "FFmpeg execution failed due to invalid filter, codec, path, or binary availability"
+      }
+    ],
+    "example_error": {
+      "status": "error",
+      "error_type": "ValueError",
+      "message": "end_time must be greater than start_time",
+      "details": {
+        "start_time": 5,
+        "end_time": 4
+      }
+    }
+  },
+  "ai_agent_usage_guide": {
+    "recommended_sequence": [
+      "Initialize engine with ffmpeg_path and ffprobe_path when binaries are not in PATH.",
+      "For one caption use add_text.",
+      "For storyboard captions use create_overlay + add_text_overlays.",
+      "Always provide explicit output_path in automation pipelines.",
+      "Validate final file with ffprobe for audio/video stream presence."
+    ],
+    "idempotency_note": "Rendering writes/overwrites output file path; callers should manage unique paths per run.",
+    "safe_defaults": {
+      "font_color": "white",
+      "box": true,
+      "box_color": "black@0.55",
+      "shadow": "off unless shadow_x or shadow_y is non-zero",
+      "position": "center",
+      "duration_mode": "full"
+    }
+  }
+}
