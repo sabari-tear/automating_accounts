@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
 """
-Main: Analyze video context using best-practice libraries.
+Main: Automated Reel Creator with Instagram batch upload.
 
-Demonstrates:
-1. Dependency injection for LLM providers
-2. Error handling with custom exceptions
-3. Structured configuration management
-4. Extensible architecture (easy to add new providers/extractors)
+Modes:
+  python main.py                        # process single test video (dev mode)
+  python main.py --accounts accounts.json  # batch mode — reads accounts, uploads 2 reels per account
 """
 
+import json
 import logging
 import os
 import sys
@@ -33,6 +32,8 @@ from library.video_context_analyzer import (
 from library.reel_caption_engine import ReelCaptionEngine
 from library.video_text_engine.engine import VideoTextEngine
 from library.instagram_post_engine import InstagramPostEngine
+from library.instagram_uploader import InstagramUploader
+from library.upload_log import pick_pending_videos, mark_uploaded
 import ffmpeg as _ffmpeg
 
 # Configure logging
@@ -235,27 +236,196 @@ def show_available_providers() -> None:
         print(f"   • {provider}")
 
 
+def process_and_upload_video(
+    video_path: Path,
+    uploader: InstagramUploader,
+    extra_tags: list[str],
+    output_dir: Path,
+) -> bool:
+    """
+    Full pipeline for one video: analyze → caption → render → thumbnail → post → upload.
+
+    Returns True on successful upload, False otherwise.
+    """
+    print(f"\n  📹 Processing: {video_path.name}")
+
+    try:
+        analysis_llm = create_llm_from_env()
+        analyzer = VideoContextAnalyzer(llm=analysis_llm)
+        analysis = analyzer.analyze(video_path=video_path, frames_per_second=1, max_frames=6)
+        print(f"     mood={analysis.mood}  intensity={analysis.intensity}  confidence={analysis.confidence:.0%}")
+
+        caption_llm = LLM(
+            api_key=analysis_llm._provider.config.get_api_key(),
+            model_name=analysis_llm.model_name,
+            temperature=1.0,
+        )
+
+        # ── caption overlay ──
+        caption_engine = ReelCaptionEngine(llm=caption_llm, overlay_count=1)
+        probe_data = _ffmpeg.probe(str(video_path), cmd=os.getenv("FFPROBE_PATH") or "ffprobe")
+        duration = float(probe_data["format"]["duration"])
+        _validate_instagram_format(probe_data, duration)
+
+        result = caption_engine.generate(analysis, video_duration=duration)
+        caption_text = result.overlays[0].text if result.overlays else ""
+        print(f"     caption: \"{caption_text}\"")
+
+        # ── render ──
+        output_dir.mkdir(parents=True, exist_ok=True)
+        captioned_path = output_dir / (video_path.stem + "_captioned.mp4")
+        engine = VideoTextEngine(
+            ffmpeg_path=os.getenv("FFMPEG_PATH"),
+            ffprobe_path=os.getenv("FFPROBE_PATH"),
+        )
+        engine.add_text_overlays(video_path, result.overlays, output_path=captioned_path)
+        print(f"     rendered → {captioned_path.name}")
+
+        # ── thumbnail ──
+        thumb_time = _get_best_moment_time(analysis, duration)
+        thumb_path = output_dir / (video_path.stem + "_thumbnail.jpg")
+        _extract_thumbnail(video_path, thumb_time, thumb_path)
+        print(f"     thumbnail → {thumb_path.name}")
+
+        # ── Instagram post text ──
+        post_engine = InstagramPostEngine(llm=caption_llm)
+        post = post_engine.generate(analysis)
+
+        # Inject account-specific extra tags into the post text
+        if extra_tags:
+            extra_block = " ".join(f"#{t.lstrip('#')}" for t in extra_tags)
+            post_text = post.post_text + " " + extra_block
+        else:
+            post_text = post.post_text
+
+        # Save post text
+        post_path = output_dir / (video_path.stem + "_post.txt")
+        post_path.write_text(post_text, encoding="utf-8")
+        print(f"     post saved → {post_path.name}")
+
+        # ── upload ──
+        print(f"     uploading to @{uploader.username}...")
+        upload_result = uploader.upload_reel(
+            video_path=captioned_path,
+            caption=post_text,
+            thumbnail_path=thumb_path,
+        )
+
+        if upload_result.success:
+            print(f"     ✅ Uploaded! media_id={upload_result.media_id}")
+            return True
+        else:
+            print(f"     ❌ Upload failed: {upload_result.error}")
+            return False
+
+    except Exception as e:
+        print(f"     ❌ Error processing {video_path.name}: {e}")
+        logger.exception("Full traceback:")
+        return False
+
+
+def run_batch(accounts_path: str | Path) -> None:
+    """
+    Batch mode: read accounts.json, process and upload 2 reels per account.
+
+    accounts.json schema:
+    [
+      {
+        "username": "ig_username",
+        "password": "ig_password",
+        "folder": "reels/action",
+        "description_style": "anime",
+        "extra_tags": ["naruto", "animeedit"]
+      }
+    ]
+    """
+    accounts_file = Path(accounts_path)
+    if not accounts_file.exists():
+        print(f"❌ accounts file not found: {accounts_file}")
+        sys.exit(1)
+
+    try:
+        accounts = json.loads(accounts_file.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as e:
+        print(f"❌ Invalid JSON in {accounts_file}: {e}")
+        sys.exit(1)
+
+    if not isinstance(accounts, list) or not accounts:
+        print("❌ accounts.json must be a non-empty JSON array")
+        sys.exit(1)
+
+    print(f"\n📋 Loaded {len(accounts)} account(s) from {accounts_file}")
+    print("=" * 60)
+
+    total_uploaded = 0
+    total_failed = 0
+
+    for account in accounts:
+        username = account.get("username", "").strip()
+        password = account.get("password", "").strip()
+        folder = account.get("folder", "").strip()
+        extra_tags = account.get("extra_tags", [])
+
+        if not username or not password or not folder:
+            print(f"\n⚠️  Skipping incomplete account entry: {account}")
+            continue
+
+        print(f"\n👤 Account: @{username}  |  folder: {folder}")
+        print("-" * 50)
+
+        # Find 2 pending (not yet uploaded) videos
+        videos = pick_pending_videos(username=username, folder=folder, count=2)
+        if not videos:
+            print(f"   ℹ️  No pending videos in {folder} — all already uploaded or folder is empty")
+            continue
+
+        print(f"   Found {len(videos)} pending video(s): {[v.name for v in videos]}")
+
+        uploader = InstagramUploader(username=username, password=password)
+        output_dir = Path(folder) / "output"
+
+        for video_path in videos:
+            success = process_and_upload_video(
+                video_path=video_path,
+                uploader=uploader,
+                extra_tags=extra_tags,
+                output_dir=output_dir,
+            )
+            if success:
+                mark_uploaded(username=username, video_path=str(video_path))
+                total_uploaded += 1
+            else:
+                total_failed += 1
+
+    print("\n" + "=" * 60)
+    print(f"✨ Batch complete — uploaded: {total_uploaded}  failed: {total_failed}")
+
+
 def main():
     """Main entry point."""
-    # Example video path
+    # ── Batch mode: python main.py --accounts accounts.json ──────────────
+    if "--accounts" in sys.argv:
+        idx = sys.argv.index("--accounts")
+        if idx + 1 >= len(sys.argv):
+            print("❌ --accounts requires a path argument, e.g. --accounts accounts.json")
+            sys.exit(1)
+        run_batch(sys.argv[idx + 1])
+        return
+
+    # ── Dev mode: single test video ───────────────────────────────────────
     video_path = "test/sample_input_videos/2888111587029525988_47150597545.mp4"
-    
-    # Check if video exists
+
     if not Path(video_path).exists():
         print(f"❌ Video not found: {video_path}")
         print("\n💡 Usage:")
-        print(f"   python main.py                         # Analyze with default provider")
-        print(f"   python main.py <video_path>            # Analyze specific video")
-        print(f"   python main.py <video_path> <provider> # Use custom provider")
+        print("   python main.py                           # dev mode (single video)")
+        print("   python main.py --accounts accounts.json  # batch mode")
         show_available_providers()
         sys.exit(1)
-    
-    # Analyze with default provider
+
     analysis = analyze_video_default(video_path)
-    
-    # Save to file
     save_analysis(analysis, "analysis_output.json")
-    
+
     print("\n" + "=" * 60)
     print("✨ Done!")
 
